@@ -88,16 +88,19 @@
 // ponytail: 隨機重試 + 貪婪，不保證最佳解；人數 ~20 以內很夠用。
 function attempt(n, allPairs, courts) {
   let left = allPairs.slice();
-  const rest = Array(n).fill(0), remain = Array(n).fill(n - 1), rounds = [];
-  let maxRest = 0;
+  const rest = Array(n).fill(0), play = Array(n).fill(0), remain = Array(n).fill(n - 1), rounds = [];
+  let maxRest = 0, maxPlay = 0;
   while (left.length >= 2) {
     const ranked = left
-      .map(p => ({ p, w: 3 * (rest[p[0]] ** 2 + rest[p[1]] ** 2) + remain[p[0]] + remain[p[1]] + Math.random() * 3 }))
+      .map(p => ({ p, w: 3 * (rest[p[0]] ** 2 + rest[p[1]] ** 2) + remain[p[0]] + remain[p[1]] + Math.random() * 10
+        - 40 * ((play[p[0]] >= 2) + (play[p[1]] >= 2)) })) // 已連打 2 輪的人盡量排休
       .sort((a, b) => b.w - a.w);
     const used = new Set(), chosen = [];
-    for (const { p } of ranked) {
+    // 第一趟跳過已連打 2 輪的人，不夠再補
+    for (const tired of [false, true]) for (const { p } of ranked) {
       if (chosen.length === 2 * courts) break;
       if (used.has(p[0]) || used.has(p[1])) continue;
+      if (!tired && (play[p[0]] >= 2 || play[p[1]] >= 2)) continue;
       chosen.push(p); used.add(p[0]); used.add(p[1]);
     }
     if (chosen.length % 2) { const p = chosen.pop(); used.delete(p[0]); used.delete(p[1]); }
@@ -108,12 +111,13 @@ function attempt(n, allPairs, courts) {
     for (const p of chosen) { remain[p[0]]--; remain[p[1]]--; }
     const resting = [];
     for (let i = 0; i < n; i++) {
-      if (used.has(i)) rest[i] = 0;
-      else { rest[i]++; resting.push(i); if (remain[i] > 0) maxRest = Math.max(maxRest, rest[i]); }
+      if (used.has(i)) { rest[i] = 0; play[i]++; maxPlay = Math.max(maxPlay, play[i]); }
+      else { play[i] = 0; rest[i]++; resting.push(i); if (remain[i] > 0) maxRest = Math.max(maxRest, rest[i]); }
     }
     rounds.push({ matches, resting });
   }
-  return { rounds, left, maxRest, score: left.length * 10000 + maxRest * 100 + rounds.length };
+  const over = Math.max(0, maxRest - 2) + Math.max(0, maxPlay - 2);
+  return { rounds, left, maxRest, maxPlay, score: left.length * 10000 + over * 1000 + (maxRest + maxPlay) * 10 + rounds.length };
 }
 
 function schedule(n, courts, tries = 3000) {
@@ -143,7 +147,10 @@ $('go').onclick = () => {
   const r = schedule(names.length, courts);
   const nm = i => names[i];
   const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  let html = `<p class="muted summary">${names.length} 人，共 ${r.rounds.length} 輪；最長連續休息 ${r.maxRest} 輪（已打完所有搭檔的人不計）。</p>`;
+  let html = `<p class="muted summary">${names.length} 人，共 ${r.rounds.length} 輪；最長連續休息 ${r.maxRest} 輪（已打完所有搭檔的人不計）、最長連續上場 ${r.maxPlay} 輪。</p>`;
+  if (r.maxPlay > 2) html += `<p class="warn">有人得連打 ${r.maxPlay} 輪。` + (names.length < 6 * courts
+    ? `每輪上場 ${4 * courts} 人，要讓人不連打 3 輪，${courts} 個場地至少需要 ${6 * courts} 人${courts > 1 ? '，或減少場地數' : ''}。`
+    : `這個人數剛好卡在邊界，排不出完美的，已取最接近的結果；可以再按一次「產生賽程」試試。`) + `</p>`;
   if (r.maxRest > 2) html += `<p class="warn">這個人數／場地數下排不出「休息不超過兩輪」，已取最接近的結果。</p>`;
   if (r.left.length) html += `<p class="warn">未排到的搭檔：${r.left.map(p => esc(nm(p[0]) + '＋' + nm(p[1]))).join('、')}（人數不是 4 的倍數或 4 的倍數+1 時，搭檔總數無法剛好湊成對戰）</p>`;
   r.rounds.forEach((rd, k) => {
