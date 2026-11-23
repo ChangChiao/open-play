@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>雙打配對</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1d2330; --muted:#6b7280; --accent:#2563eb; --line:#e5e7eb; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1b2027; --fg:#e8eaed; --muted:#9aa3ae; --accent:#60a5fa; --line:#2c333d; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, "PingFang TC", "Noto Sans TC", sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:16px; }
+  textarea, input { width:100%; font:inherit; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg); }
+  textarea { height:140px; }
+  button { font:inherit; padding:8px 14px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; }
+  .row { display:flex; gap:12px; align-items:end; margin:12px 0; flex-wrap:wrap; }
+  .row label { flex:1; min-width:120px; }
+  .round { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; margin:12px 0; }
+  .round h3 { margin:0; display:flex; justify-content:space-between; align-items:center; }
+  .match { padding:6px 0; border-top:1px solid var(--line); margin-top:8px; }
+  .muted { color:var(--muted); font-size:14px; }
+  .warn { color:#d97706; }
+</style>
+</head>
+<body>
+<main>
+  <h1>雙打配對</h1>
+  <label>人名（換行、逗號或空白分隔）<textarea id="names" placeholder="小明&#10;小華&#10;阿美&#10;阿傑&#10;..."></textarea></label>
+  <div class="row">
+    <label>場地數<input id="courts" type="number" min="1" value="1"></label>
+    <button id="go">產生賽程</button>
+  </div>
+  <div id="out"></div>
+</main>
+<script>
+// 每一對搭檔恰好一次；每輪貪婪挑「休息最久、剩餘搭檔最多」的人上場，隨機重試取最佳。
+// ponytail: 隨機重試 + 貪婪，不保證最佳解；人數 ~20 以內很夠用。
+function attempt(n, allPairs, courts) {
+  let left = allPairs.slice();
+  const rest = Array(n).fill(0), remain = Array(n).fill(n - 1), rounds = [];
+  let maxRest = 0;
+  while (left.length >= 2) {
+    const ranked = left
+      .map(p => ({ p, w: 3 * (rest[p[0]] ** 2 + rest[p[1]] ** 2) + remain[p[0]] + remain[p[1]] + Math.random() * 3 }))
+      .sort((a, b) => b.w - a.w);
+    const used = new Set(), chosen = [];
+    for (const { p } of ranked) {
+      if (chosen.length === 2 * courts) break;
+      if (used.has(p[0]) || used.has(p[1])) continue;
+      chosen.push(p); used.add(p[0]); used.add(p[1]);
+    }
+    if (chosen.length % 2) { const p = chosen.pop(); used.delete(p[0]); used.delete(p[1]); }
+    if (!chosen.length) break; // 剩下的搭檔都撞人，排不出對戰
+    const matches = [];
+    for (let i = 0; i < chosen.length; i += 2) matches.push([chosen[i], chosen[i + 1]]);
+    left = left.filter(p => !chosen.includes(p));
+    for (const p of chosen) { remain[p[0]]--; remain[p[1]]--; }
+    const resting = [];
+    for (let i = 0; i < n; i++) {
+      if (used.has(i)) rest[i] = 0;
+      else { rest[i]++; resting.push(i); if (remain[i] > 0) maxRest = Math.max(maxRest, rest[i]); }
+    }
+    rounds.push({ matches, resting });
+  }
+  return { rounds, left, maxRest, score: left.length * 10000 + maxRest * 100 + rounds.length };
+}
+
+function schedule(n, courts, tries = 3000) {
+  const pairs = [];
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) pairs.push([i, j]);
+  let best = null;
+  for (let t = 0; t < tries; t++) {
+    const r = attempt(n, pairs, courts);
+    if (!best || r.score < best.score) best = r;
+  }
+  return best;
+}
+
+function say(text) {
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'zh-TW'; u.rate = 0.9;
+  speechSynthesis.speak(u);
+}
+
+const $ = id => document.getElementById(id);
+$('go').onclick = () => {
+  const names = [...new Set($('names').value.split(/[\s,，、]+/).filter(Boolean))];
+  const courts = Math.max(1, parseInt($('courts').value) || 1);
+  const out = $('out');
+  if (names.length < 4) { out.innerHTML = '<p class="warn">至少要 4 個人。</p>'; return; }
+  const r = schedule(names.length, courts);
+  const nm = i => names[i];
+  const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  let html = `<p class="muted">${names.length} 人，共 ${r.rounds.length} 輪；最長連續休息 ${r.maxRest} 輪（已打完所有搭檔的人不計）。</p>`;
+  if (r.maxRest > 2) html += `<p class="warn">這個人數／場地數下排不出「休息不超過兩輪」，已取最接近的結果。</p>`;
+  if (r.left.length) html += `<p class="warn">未排到的搭檔：${r.left.map(p => esc(nm(p[0]) + '＋' + nm(p[1]))).join('、')}（人數不是 4 的倍數或 4 的倍數+1 時，搭檔總數無法剛好湊成對戰）</p>`;
+  r.rounds.forEach((rd, k) => {
+    const speech = `第${k + 1}輪。` + rd.matches.map(([a, b], c) =>
+      `${courts > 1 ? `第${c + 1}場地，` : ''}${nm(a[0])}和${nm(a[1])}，對戰，${nm(b[0])}和${nm(b[1])}。`).join('');
+    html += `<div class="round"><h3>第 ${k + 1} 輪 <button data-say="${esc(speech)}">🔊 唱名</button></h3>` +
+      rd.matches.map(([a, b], c) => `<div class="match">${courts > 1 ? `場地 ${c + 1}：` : ''}` +
+        `<b>${esc(nm(a[0]))}、${esc(nm(a[1]))}</b> 一組 vs <b>${esc(nm(b[0]))}、${esc(nm(b[1]))}</b> 一組</div>`).join('') +
+      (rd.resting.length ? `<div class="muted">休息：${rd.resting.map(i => esc(nm(i))).join('、')}</div>` : '') + '</div>';
+  });
+  out.innerHTML = html;
+};
+$('out').onclick = e => { const t = e.target.closest('[data-say]'); if (t) say(t.dataset.say); };
+</script>
+</body>
+</html>
